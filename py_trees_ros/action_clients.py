@@ -8,6 +8,9 @@
 # Documentation
 ##############################################################################
 from asyncio.tasks import wait_for
+from py_trees_ros_interfaces import msg
+
+import rospy
 
 """
 Behaviours for ROS actions.
@@ -20,9 +23,9 @@ Behaviours for ROS actions.
 import typing
 import uuid
 
-import action_msgs.msg as action_msgs  # GoalStatus
+import actionlib
+import actionlib_msgs.msg as action_msgs
 import py_trees
-import rclpy.action
 
 from . import exceptions
 
@@ -113,17 +116,19 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         )
         self.generate_feedback_message = generate_feedback_message
 
-        self.node = None
         self.action_client = None
 
         self.status_strings = {
-                action_msgs.GoalStatus.STATUS_UNKNOWN : "STATUS_UNKNOWN",  # noqa
-                action_msgs.GoalStatus.STATUS_ACCEPTED : "STATUS_ACCEPTED",  # noqa
-                action_msgs.GoalStatus.STATUS_EXECUTING: "STATUS_EXECUTING",  # noqa
-                action_msgs.GoalStatus.STATUS_CANCELING: "STATUS_CANCELING",  # noqa
-                action_msgs.GoalStatus.STATUS_SUCCEEDED: "STATUS_SUCCEEDED",  # noqa
-                action_msgs.GoalStatus.STATUS_CANCELED : "STATUS_CANCELED",  # noqa
-                action_msgs.GoalStatus.STATUS_ABORTED  : "STATUS_ABORTED"  # noqa
+                action_msgs.GoalStatus.PENDING: "PENDING",  # noqa
+                action_msgs.GoalStatus.ACTIVE: "ACTIVE",  # noqa
+                action_msgs.GoalStatus.PREEMPTED: "PREEMPTED",  # noqa
+                action_msgs.GoalStatus.SUCCEEDED: "SUCCEEDED",  # noqa
+                action_msgs.GoalStatus.ABORTED: "ABORTED",  # noqa
+                action_msgs.GoalStatus.REJECTED: "REJECTED",  # noqa
+                action_msgs.GoalStatus.PREEMPTING: "PREEMPTING",  # noqa
+                action_msgs.GoalStatus.RECALLING: "RECALLING",  # noqa
+                action_msgs.GoalStatus.RECALLED: "RECALLED",  # noqa
+                action_msgs.GoalStatus.LOST: "LOST",  # noqa
             }
 
     def setup(self, **kwargs):
@@ -135,32 +140,22 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
                behaviour and in turn, all of it's children
 
         Raises:
-            :class:`KeyError`: if a ros2 node isn't passed under the key 'node' in kwargs
             :class:`~py_trees_ros.exceptions.TimedOutError`: if the action server could not be found
         """
         self.logger.debug("{}.setup()".format(self.qualified_name))
-        try:
-            self.node = kwargs['node']
-        except KeyError as e:
-            error_message = "didn't find 'node' in setup's kwargs [{}][{}]".format(self.qualified_name)
-            raise KeyError(error_message) from e  # 'direct cause' traceability
 
-        self.action_client = rclpy.action.ActionClient(
-            node=self.node,
-            action_type=self.action_type,
-            action_name=self.action_name
-        )
+        self.action_client = actionlib.SimpleActionClient(self.action_name, self.action_type)
         result = None
         if self.wait_for_server_timeout_sec > 0.0:
-            result = self.action_client.wait_for_server(timeout_sec=self.wait_for_server_timeout_sec)
+            result = self.action_client.wait_for_server(timeout=rospy.Duration(self.wait_for_server_timeout_sec))
         else:
             iterations = 0
             period_sec = -1.0*self.wait_for_server_timeout_sec
             while not result:
                 iterations += 1
-                result = self.action_client.wait_for_server(timeout_sec=period_sec)
+                result = self.action_client.wait_for_server(timeout=rospy.Duration(period_sec))
                 if not result:
-                    self.node.get_logger().warning(
+                    rospy.logwarn(
                         "waiting for action server ... [{}s][{}][{}]".format(
                             iterations * period_sec,
                             self.action_name,
@@ -169,11 +164,11 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
                     )
         if not result:
             self.feedback_message = "timed out waiting for the server [{}]".format(self.action_name)
-            self.node.get_logger().error("{}[{}]".format(self.feedback_message, self.qualified_name))
+            rospy.logerr("{}[{}]".format(self.feedback_message, self.qualified_name))
             raise exceptions.TimedOutError(self.feedback_message)
         else:
             self.feedback_message = "... connected to action server [{}]".format(self.action_name)
-            self.node.get_logger().info("{}[{}]".format(self.feedback_message, self.qualified_name))
+            rospy.loginfo("{}[{}]".format(self.feedback_message, self.qualified_name))
 
     def initialise(self):
         """
@@ -182,9 +177,7 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         self.logger.debug("{}.initialise()".format(self.qualified_name))
 
         # initialise some temporary variables
-        self.goal_handle = None
-        self.send_goal_future = None
-        self.get_result_future = None
+        self.sent_goal = False
 
         self.result_message = None
         self.result_status = None
@@ -194,7 +187,7 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
             self.send_goal_request(self.blackboard.goal)
             self.feedback_message = "sent goal request"
         except KeyError:
-            pass  # self.send_goal_future will be None, check on that
+            self.sent_goal = False
 
     def update(self):
         """
@@ -207,28 +200,20 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         """
         self.logger.debug("{}.update()".format(self.qualified_name))
 
-        if self.send_goal_future is None:
+        if not self.sent_goal:
             self.feedback_message = "no goal to send"
-            return py_trees.common.Status.FAILURE
-        if self.goal_handle is not None and not self.goal_handle.accepted:
-            # goal was rejected
-            self.feedback_message = "goal rejected"
             return py_trees.common.Status.FAILURE
         if self.result_status is None:
             return py_trees.common.Status.RUNNING
-        elif not self.get_result_future.done():
-            # should never get here
-            self.node.get_logger().warn("got result, but future not yet done [{}]".format(self.qualified_name))
-            return py_trees.common.Status.RUNNING
         else:
-            self.node.get_logger().debug("goal result [{}]".format(self.qualified_name))
-            self.node.get_logger().debug("  status: {}".format(self.result_status_string))
-            self.node.get_logger().debug("  message: {}".format(self.result_message))
-            if self.result_status == action_msgs.GoalStatus.STATUS_SUCCEEDED:  # noqa
+            rospy.logdebug("goal result [{}]".format(self.qualified_name))
+            rospy.logdebug("  status: {}".format(self.result_status_string))
+            rospy.logdebug("  message: {}".format(self.result_message))
+            if self.result_status == action_msgs.GoalStatus.SUCCEEDED:  # noqa
                 self.feedback_message = "successfully completed"
                 return py_trees.common.Status.SUCCESS
             else:
-                self.feedback_message = "failed"
+                self.feedback_message = "goal failed with status {}".format(self.result_status_string.lower())
                 return py_trees.common.Status.FAILURE
 
     def terminate(self, new_status: py_trees.common.Status):
@@ -254,7 +239,7 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         """
         Clean up the action client when shutting down.
         """
-        self.action_client.destroy()
+        self.action_client.action_client.stop()
 
     ########################################
     # Action Client Methods
@@ -270,7 +255,7 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         """
         if self.generate_feedback_message is not None:
             self.feedback_message = "feedback: {}".format(self.generate_feedback_message(msg))
-            self.node.get_logger().debug(
+            rospy.logdebug(
                 '{} [{}]'.format(
                     self.feedback_message,
                     self.qualified_name
@@ -283,42 +268,36 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         chain of callbacks that will lead to a result.
         """
         self.feedback_message = "sending goal ..."
-        self.node.get_logger().debug("{} [{}]".format(
+        rospy.logdebug("{} [{}]".format(
             self.feedback_message,
             self.qualified_name
         ))
-        self.send_goal_future = self.action_client.send_goal_async(
+        self.action_client.send_goal(
             goal,
-            feedback_callback=self.feedback_callback,
-            # A random uuid is always generated, since we're not sending more than one
-            # at a time, we don't need to generate and track them here
-            # goal_uuid=unique_identifier_msgs.UUID(uuid=list(uuid.uuid4().bytes))
+            done_cb=self.goal_result_callback,
+            active_cb=self.goal_active_callback,
+            feedback_cb=self.feedback_callback
         )
-        self.send_goal_future.add_done_callback(self.goal_response_callback)
+        self.sent_goal = True
 
-    def goal_response_callback(self, future: rclpy.task.Future):
+    def goal_active_callback(self):
         """
-        Handle goal response, proceed to listen for the result if accepted.
-
-        Args:
-            future: incoming goal request result delivered from the action server
+        Callback that gets called when the goal transitions to Active.
         """
-        if future.result() is None:
-            self.feedback_message = "goal request failed :[ [{}]\n{!r}".format(self.qualified_name, future.exception())
-            self.node.get_logger().debug('... {}'.format(self.feedback_message))
-            return
-        self.goal_handle = future.result()
-        if not self.goal_handle.accepted:
-            self.feedback_message = "goal rejected :( [{}]".format(self.qualified_name)
-            self.node.get_logger().debug('... {}'.format(self.feedback_message))
-            return
-        else:
-            self.feedback_message = "goal accepted :) [{}]".format(self.qualified_name)
-            self.node.get_logger().debug("... {}".format(self.feedback_message))
-            self.node.get_logger().debug("  {!s}".format(future.result()))
+        self.feedback_message = "goal is active [{}]".format(self.qualified_name)
+        rospy.logdebug('... {}'.format(self.feedback_message))
 
-        self.get_result_future = self.goal_handle.get_result_async()
-        self.get_result_future.add_done_callback(self.get_result_callback)
+    def goal_result_callback(self, terminal_state: int, result: typing.Any):
+        """
+        Callback for the result, saves data into local variables so that
+        the update method can react accordingly.
+        """
+        self.result_message = result
+        self.result_status = terminal_state
+        self.result_status_string = self.status_strings[self.result_status]
+
+        self.feedback_message = "goal finished with status {} [{}]".format(self.result_status_string.lower(), self.qualified_name)
+        rospy.logdebug('... {}'.format(self.feedback_message))
 
     def send_cancel_request(self):
         """
@@ -328,38 +307,9 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         interrupt).
         """
         self.feedback_message = "cancelling goal ... [{}]".format(self.qualified_name)
-        self.node.get_logger().debug(self.feedback_message)
+        rospy.logdebug(self.feedback_message)
 
-        if self.goal_handle is not None:
-            future = self.goal_handle.cancel_goal_async()
-            future.add_done_callback(self.cancel_response_callback)
-
-    def cancel_response_callback(self, future: rclpy.task.Future):
-        """
-        Immediate callback for the result of a cancel request. This will
-        set the behaviour's feedback message accordingly.
-
-        Args:
-            future: incoming cancellation result delivered from the action server
-        """
-        cancel_response = future.result()
-        if len(cancel_response.goals_canceling) > 0:
-            self.feedback_message = "goal successfully cancelled [{}]".format(self.qualified_name)
-        else:
-            self.feedback_message = "goal failed to cancel [{}]".format(self.qualified_name)
-        self.node.get_logger().debug('... {}'.format(self.feedback_message))
-
-    def get_result_callback(self, future: rclpy.task.Future):
-        """
-        Immediate callback for the result, saves data into local variables so that
-        the update method can react accordingly.
-
-        Args:
-            future: incoming goal result delivered from the action server
-        """
-        self.result_message = future.result()
-        self.result_status = future.result().status
-        self.result_status_string = self.status_strings[self.result_status]
+        self.action_client.cancel_goal()
 
 
 class FromConstant(FromBlackboard):

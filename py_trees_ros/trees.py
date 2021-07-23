@@ -38,7 +38,7 @@ import py_trees.console as console
 import py_trees_ros_interfaces.msg as py_trees_msgs  # noqa
 import py_trees_ros_interfaces.srv as py_trees_srvs  # noqa
 import rcl_interfaces.msg as rcl_interfaces_msgs
-import rclpy
+import rospy
 import unique_identifier_msgs.msg as unique_identifier_msgs
 
 from . import blackboard
@@ -82,7 +82,6 @@ class SnapshotStream(object):
 
     def __init__(
         self,
-        node: rclpy.node.Node,
         topic_name: str=None,
         parameters: 'SnapshotStream.Parameters'=None,
     ):
@@ -90,23 +89,17 @@ class SnapshotStream(object):
         Create the publisher, ready for streaming.
 
         Args:
-            node: node to hook ros communications on
             topic_name: snapshot stream name, uniquely generated if None
             parameters: configuration of the snapshot stream
         """
-        self.node = node
-        self.topic_name = SnapshotStream.expand_topic_name(self.node, topic_name)
-        self.publisher = self.node.create_publisher(
-            msg_type=py_trees_msgs.BehaviourTree,
-            topic=self.topic_name,
-            qos_profile=utilities.qos_profile_latched()
-        )
+        self.topic_name = SnapshotStream.expand_topic_name(topic_name)
+        self.publisher = rospy.Publisher(self.topic_name, py_trees_msgs.BehaviourTree, latch=True, queue_size=1)
         self.parameters = parameters if parameters is not None else SnapshotStream.Parameters()
         self.last_snapshot_timestamp = None
         self.statistics = None
 
     @staticmethod
-    def expand_topic_name(node: rclpy.node.Node, topic_name: str) -> str:
+    def expand_topic_name(topic_name: str) -> str:
         """
         Custom name expansion depending on the topic name provided. This is part of the
         stream configuration on request which either provides no hint (automatic name
@@ -114,32 +107,19 @@ class SnapshotStream(object):
         namespace) or a complete hint (absolute name that does not need expansion).
 
         Args:
-            node: node used to reference the absolute namespace if the hint is not absolute
             topic_name: hint for the topic name
 
         Returns:
             the expanded topic name
         """
         if topic_name is None or not topic_name:
-            expanded_topic_name = rclpy.expand_topic_name.expand_topic_name(
-                topic_name="~/snapshot_streams/_snapshots_" + str(SnapshotStream._counter),
-                node_name=node.get_name(),
-                node_namespace=node.get_namespace()
-            )
+            expanded_topic_name = rospy.resolve_name("~/snapshot_streams/_snapshots_" + str(SnapshotStream._counter))
             SnapshotStream._counter += 1
             return expanded_topic_name
         elif topic_name.startswith("~"):
-            return rclpy.expand_topic_name.expand_topic_name(
-                topic_name=topic_name,
-                node_name=node.get_name(),
-                node_namespace=node.get_namespace()
-            )
+            return rospy.resolve_name(topic_name)
         elif not topic_name.startswith("/"):
-            return rclpy.expand_topic_name.expand_topic_name(
-                topic_name="~/snapshot_streams/" + topic_name,
-                node_name=node.get_name(),
-                node_namespace=node.get_namespace()
-            )
+            return rospy.resolve_name("~/snapshot_streams/" + topic_name)
         else:
             return topic_name
 
@@ -210,7 +190,7 @@ class SnapshotStream(object):
         """
         Shutdown the (temporarily) created publisher.
         """
-        self.node.destroy_publisher(self.publisher)
+        self.publisher.unregister()
 
 
 class BehaviourTree(py_trees.trees.BehaviourTree):
@@ -270,7 +250,6 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
         self.timer = None
 
         # delay ROS artifacts so we can construct the tree without a ROS connection
-        self.node = None
         self.snapshot_streams = {}
 
     def setup(
@@ -292,26 +271,15 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
            These parameters take precedence over the period and timeout args provided here.
            If parameters are not configured at runtime, then the period and timeout args
            provided here will inialise the declared parameters.
-
-        Raises:
-            rclpy.exceptions.NotInitializedException: rclpy not yet initialised
-            Exception: be ready to catch if any of the behaviours raise an exception
         """
-        # node creation - can raise rclpy.exceptions.NotInitializedException
-        default_node_name = "tree"
-        self.node = rclpy.create_node(node_name=default_node_name)
         if visitor is None:
-            visitor = visitors.SetupLogger(node=self.node)
-        self.default_snapshot_stream_topic_name = SnapshotStream.expand_topic_name(
-            node=self.node,
-            topic_name="~/snapshots"
-        )
+            visitor = visitors.SetupLogger()
+        self.default_snapshot_stream_topic_name = SnapshotStream.expand_topic_name("~/snapshots")
 
         ########################################
         # ROS Comms
         ########################################
         self.snapshot_stream_services = utilities.Services(
-            node=self.node,
             service_details=[
                 ("close", "~/snapshot_streams/close", py_trees_srvs.CloseSnapshotStream, self._close_snapshot_stream),
                 ("open", "~/snapshot_streams/open", py_trees_srvs.OpenSnapshotStream, self._open_snapshot_stream),
@@ -320,97 +288,30 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
             introspection_topic_name="snapshot_streams/services"
         )
         self.blackboard_exchange = blackboard.Exchange()
-        self.blackboard_exchange.setup(self.node)
-
-        ################################################################################
-        # Parameters
-        ################################################################################
-        self.node.add_on_set_parameters_callback(
-            callback=self._set_parameters_callback
-        )
+        self.blackboard_exchange.setup()
 
         ########################################
         # default_snapshot_stream
         ########################################
-        self.node.declare_parameter(
-            name='default_snapshot_stream',
-            value=False,
-            descriptor=rcl_interfaces_msgs.ParameterDescriptor(
-                name="default_snapshot_stream",
-                type=rcl_interfaces_msgs.ParameterType.PARAMETER_BOOL,  # noqa
-                description="enable/disable the default snapshot stream in ~/snapshots",
-                additional_constraints="",
-                read_only=False,
+        default_snapshot_stream = rospy.get_param('~default_snapshot_stream', False)
+        if default_snapshot_stream:
+            parameters = SnapshotStream.Parameters(
+                snapshot_period=rospy.get_param("~default_snapshot_period", py_trees.common.Duration.INFINITE.value),
+                blackboard_data=rospy.get_param("~default_snapshot_blackboard_data", True),
+                blackboard_activity=rospy.get_param("~default_snapshot_blackboard_activity", False)
             )
-        )
-
-        ########################################
-        # default_snapshot_period
-        ########################################
-        self.node.declare_parameter(
-            name='default_snapshot_period',
-            value=2.0,  # DJS: py_trees.common.Duration.INFINITE.value,
-            descriptor=rcl_interfaces_msgs.ParameterDescriptor(
-                name="default_snapshot_period",
-                type=rcl_interfaces_msgs.ParameterType.PARAMETER_DOUBLE,  # noqa
-                description="time between snapshots, set to math.inf to only publish tree state changes",
-                additional_constraints="",
-                read_only=False,
-                floating_point_range=[rcl_interfaces_msgs.FloatingPointRange(
-                    from_value=0.0,
-                    to_value=py_trees.common.Duration.INFINITE.value)]
+            self.snapshot_streams[self.default_snapshot_stream_topic_name] = SnapshotStream(
+                topic_name=self.default_snapshot_stream_topic_name,
+                parameters=parameters
             )
-        )
-
-        ########################################
-        # default_snapshot_blackboard_data
-        ########################################
-        self.node.declare_parameter(
-            name='default_snapshot_blackboard_data',
-            value=True,
-            descriptor=rcl_interfaces_msgs.ParameterDescriptor(
-                name="default_snapshot_blackboard_data",
-                type=rcl_interfaces_msgs.ParameterType.PARAMETER_BOOL,  # noqa
-                description="append blackboard data (tracking status, visited variables) to the default snapshot stream",
-                additional_constraints="",
-                read_only=False,
-            )
-        )
-
-        ########################################
-        # default_snapshot_blackboard_activity
-        ########################################
-        self.node.declare_parameter(
-            name='default_snapshot_blackboard_activity',
-            value=False,
-            descriptor=rcl_interfaces_msgs.ParameterDescriptor(
-                name="default_snapshot_blackboard_activity",
-                type=rcl_interfaces_msgs.ParameterType.PARAMETER_BOOL,  # noqa
-                description="append the blackboard activity stream to the default snapshot stream",
-                additional_constraints="",
-                read_only=False,
-            )
-        )
+            if self.snapshot_streams[self.default_snapshot_stream_topic_name].parameters.blackboard_activity:
+                self.blackboard_exchange.register_activity_stream_client()
 
         ########################################
         # setup_timeout
         ########################################
-        self.node.declare_parameter(
-            name='setup_timeout',
-            value=timeout if timeout != py_trees.common.Duration.INFINITE else py_trees.common.Duration.INFINITE.value,
-            descriptor=rcl_interfaces_msgs.ParameterDescriptor(
-                name="setup_timeout",
-                type=rcl_interfaces_msgs.ParameterType.PARAMETER_DOUBLE,  # noqa
-                description="timeout for ROS tree setup (node, pubs, subs, ...)",
-                additional_constraints="",
-                read_only=True,
-                floating_point_range=[rcl_interfaces_msgs.FloatingPointRange(
-                    from_value=0.0,
-                    to_value=py_trees.common.Duration.INFINITE.value)]
-            )
-        )
-        # Get the resulting timeout
-        setup_timeout = self.node.get_parameter("setup_timeout").value
+        default_setup_timeout = timeout if timeout != py_trees.common.Duration.INFINITE else py_trees.common.Duration.INFINITE.value
+        setup_timeout = rospy.get_param("~setup_timeout", default_setup_timeout)
         # Ugly workaround to accomodate use of the enum (TODO: rewind this)
         #   Need to pass the enum for now (instead of just a float) in case
         #   there are behaviours out in the wild that apply logic around the
@@ -424,8 +325,7 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
         try:
             super().setup(
                 timeout=setup_timeout,
-                visitor=visitor,
-                node=self.node
+                visitor=visitor
             )
         except RuntimeError as e:
             if str(e) == "tree setup interrupted or timed out":
@@ -441,58 +341,6 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
         # to the callback function here.
         self.tree_update_handler = self._on_tree_update_handler
         self.post_tick_handlers.append(self._snapshots_post_tick_handler)
-
-    def _set_parameters_callback(
-        self,
-        parameters: typing.List[rclpy.parameter.Parameter]
-    ) -> rcl_interfaces_msgs.SetParametersResult:
-        """
-        Callback that dynamically handles changes in parameters.
-
-        Args:
-            parameters: list of one or more declared parameters with updated values
-
-        Returns:
-            result of the set parameters requests
-        """
-        for parameter in parameters:
-            if parameter.name == "default_snapshot_stream":
-                if self.default_snapshot_stream_topic_name in self.snapshot_streams:
-                    self.snapshot_streams[self.default_snapshot_stream_topic_name].shutdown()
-                    if self.snapshot_streams[self.default_snapshot_stream_topic_name].parameters.blackboard_activity:
-                        self.blackboard_exchange.unregister_activity_stream_client()
-                    del self.snapshot_streams[self.default_snapshot_stream_topic_name]
-                if parameter.value:
-                    try:
-                        parameters = SnapshotStream.Parameters(
-                            snapshot_period=self.node.get_parameter("default_snapshot_period").value,
-                            blackboard_data=self.node.get_parameter("default_snapshot_blackboard_data").value,
-                            blackboard_activity=self.node.get_parameter("default_snapshot_blackboard_activity").value
-                        )
-                    except rclpy.exceptions.ParameterNotDeclaredException:
-                        parameters = SnapshotStream.Parameters()
-                    self.snapshot_streams[self.default_snapshot_stream_topic_name] = SnapshotStream(
-                        node=self.node,
-                        topic_name=self.default_snapshot_stream_topic_name,
-                        parameters=parameters
-                    )
-                    if self.snapshot_streams[self.default_snapshot_stream_topic_name].parameters.blackboard_activity:
-                        self.blackboard_exchange.register_activity_stream_client()
-            elif parameter.name == "default_snapshot_blackboard_data":
-                if self.default_snapshot_stream_topic_name in self.snapshot_streams:
-                    self.snapshot_streams[self.default_snapshot_stream_topic_name].parameters.blackboard_data = parameter.value
-            elif parameter.name == "default_snapshot_blackboard_activity":
-                if self.default_snapshot_stream_topic_name in self.snapshot_streams:
-                    if self.snapshot_streams[self.default_snapshot_stream_topic_name].parameters.blackboard_activity != parameter.value:
-                        if parameter.value:
-                            self.blackboard_exchange.register_activity_stream_client()
-                        else:
-                            self.blackboard_exchange.unregister_activity_stream_client()
-                    self.snapshot_streams[self.default_snapshot_stream_topic_name].parameters.blackboard_activity = parameter.value
-            elif parameter.name == "default_snapshot_period":
-                if self.default_snapshot_stream_topic_name in self.snapshot_streams:
-                    self.snapshot_streams[self.default_snapshot_stream_topic_name].parameters.snapshot_period = parameter.value
-        return rcl_interfaces_msgs.SetParametersResult(successful=True)
 
     def tick_tock(
             self,
@@ -514,8 +362,8 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
             pre_tick_handler (:obj:`func`): function to execute before ticking
             post_tick_handler (:obj:`func`): function to execute after ticking
         """
-        self.timer = self.node.create_timer(
-            period_ms / 1000.0,  # unit 'seconds'
+        self.timer = rospy.Timer(
+            rospy.Duration(period_ms / 1000.0),  # unit 'seconds'
             functools.partial(
                 self._tick_tock_timer_callback,
                 number_of_iterations=number_of_iterations,
@@ -530,21 +378,15 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
         Cleanly shut down rclpy timers and nodes.
         """
         # stop ticking if we're ticking
-        if self.node is not None:
-            if self.timer is not None:
-                self.timer.cancel()
-                self.node.destroy_timer(self.timer)
+        if self.timer is not None:
+            self.timer.shutdown()
         # call shutdown on each behaviour first, in case it has
         # some esoteric shutdown steps
         super().shutdown()
-        if self.node is not None:
-            # shutdown the node - this *should* automagically clean
-            # up any non-estoeric shutdown of ros communications
-            # inside behaviours
-            self.node.destroy_node()
 
     def _tick_tock_timer_callback(
             self,
+            event: rospy.timer.TimerEvent,
             number_of_iterations,
             pre_tick_handler,
             post_tick_handler):
@@ -555,13 +397,14 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
             number_of_iterations (:obj:`int`): number of iterations to tick-tock
             pre_tick_handler (:obj:`func`): function to execute before ticking
             post_tick_handler (:obj:`func`): function to execute after ticking
+            event (:obj:`rospy.timer.TimerEvent`): event of the ros timer
         """
         if (number_of_iterations == py_trees.trees.CONTINUOUS_TICK_TOCK or
                 self.tick_tock_count < number_of_iterations):
             self.tick(pre_tick_handler, post_tick_handler)
             self.tick_tock_count += 1
         else:
-            self.timer.cancel()
+            self.timer.shutdown()
 
     def _on_tree_update_handler(self):
         """
@@ -570,8 +413,8 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
         """
         # only worth notifying once we've actually commenced
         if self.statistics is not None:
-            rclpy_start_time = rclpy.clock.Clock().now()
-            self.statistics.stamp = rclpy_start_time.to_msg()
+            rclpy_start_time = rospy.Time.now()
+            self.statistics.stamp = rclpy_start_time
             for unused_topic_name, snapshot_stream in self.snapshot_streams.items():
                 snapshot_stream.publish(
                     root=self.root,
@@ -592,8 +435,8 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
             self.time_series.popleft()
             self.tick_interval_series.popleft()
 
-        rclpy_start_time = rclpy.clock.Clock().now()
-        self.time_series.append(conversions.rclpy_time_to_float(rclpy_start_time))
+        rclpy_start_time = rospy.Time.now()
+        self.time_series.append(conversions.rospy_time_to_float(rclpy_start_time))
         if len(self.time_series) == 1:
             self.tick_interval_series.append(0.0)
         else:
@@ -601,7 +444,7 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
 
         self.statistics = py_trees_msgs.Statistics()
         self.statistics.count = self.count
-        self.statistics.stamp = rclpy_start_time.to_msg()
+        self.statistics.stamp = rclpy_start_time
         self.statistics.tick_interval = self.tick_interval_series[-1]
         self.statistics.tick_interval_average = sum(self.tick_interval_series) / len(self.tick_interval_series)
         if len(self.tick_interval_series) > 1:
@@ -619,7 +462,7 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
         Args:
             tree (:class:`~py_trees.trees.BehaviourTree`): the behaviour tree that has just been ticked
         """
-        duration = conversions.rclpy_time_to_float(rclpy.clock.Clock().now()) - self.time_series[-1]
+        duration = conversions.rospy_time_to_float(rospy.Time.now()) - self.time_series[-1]
 
         if len(self.tick_duration_series) == 10:
             self.tick_duration_series.popleft()
@@ -644,11 +487,8 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
             tree (:class:`~py_trees.trees.BehaviourTree`): the behaviour tree that has just been ticked
         """
         # checks
-        if self.node is None:
-            self.node.get_logger().error("call setup() on this tree to initialise the ros components")
-            return
         if self.root.tip() is None:
-            self.node.get_logger().error("the root behaviour failed to return a tip [hint: tree is in an INVALID state, usually as a result of incorrectly coded behaviours]")
+            rospy.logerr("the root behaviour failed to return a tip [hint: tree is in an INVALID state, usually as a result of incorrectly coded behaviours]")
             return
 
         # publish the default snapshot stream (useful for logging)
@@ -668,9 +508,9 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
 
     def _close_snapshot_stream(
         self,
-        request: py_trees_srvs.CloseSnapshotStream.Request,  # noqa
-        response: py_trees_srvs.CloseSnapshotStream.Response  # noqa
-    ) -> py_trees_srvs.CloseSnapshotStream.Response:
+        request: py_trees_srvs.CloseSnapshotStream._request_class  # noqa
+    ) -> py_trees_srvs.CloseSnapshotStream._response_class:
+        response = py_trees_srvs.CloseSnapshotStreamResponse()
         response.result = True
         try:
             self.snapshot_streams[request.topic_name].shutdown()
@@ -683,11 +523,10 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
 
     def _open_snapshot_stream(
         self,
-        request: py_trees_srvs.OpenSnapshotStream.Request,  # noqa
-        response: py_trees_srvs.OpenSnapshotStream.Response  # noqa
-    ) -> py_trees_srvs.OpenSnapshotStream.Response:
+        request: py_trees_srvs.OpenSnapshotStream._request_class  # noqa
+    ) -> py_trees_srvs.OpenSnapshotStream._response_class:
+        response = py_trees_srvs.OpenSnapshotStreamResponse()
         snapshot_stream = SnapshotStream(
-            node=self.node,
             topic_name=request.topic_name,
             parameters=SnapshotStream.Parameters(
                 blackboard_data=request.parameters.blackboard_data,
@@ -703,9 +542,9 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
 
     def _reconfigure_snapshot_stream(
         self,
-        request: py_trees_srvs.ReconfigureSnapshotStream.Request,  # noqa
-        response: py_trees_srvs.ReconfigureSnapshotStream.Response  # noqa
-    ) -> py_trees_srvs.ReconfigureSnapshotStream.Response:
+        request: py_trees_srvs.ReconfigureSnapshotStream._request_class  # noqa
+    ) -> py_trees_srvs.ReconfigureSnapshotStream._response_class:
+        response = py_trees_srvs.ReconfigureSnapshotStreamResponse()
         response.result = True
         try:
             snapshot_stream = self.snapshot_streams[request.topic_name]
@@ -786,8 +625,8 @@ class Watcher(object):
             'close': None
         }
         self.service_type_strings = {
-            'open': 'py_trees_ros_interfaces/srv/OpenSnapshotStream',
-            'close': 'py_trees_ros_interfaces/srv/CloseSnapshotStream'
+            'open': 'py_trees_ros_interfaces/OpenSnapshotStream',
+            'close': 'py_trees_ros_interfaces/CloseSnapshotStream'
         }
         self.service_types = {
             'open': py_trees_srvs.OpenSnapshotStream,
@@ -807,17 +646,12 @@ class Watcher(object):
             :class:`~py_trees_ros.exceptions.MultipleFoundError`: if multiple services were found
             :class:`~py_trees_ros.exceptions.TimedOutError`: if service clients time out waiting for the server
         """
-        self.node = rclpy.create_node(
-            node_name=utilities.create_anonymous_node_name(node_name='tree_watcher'),
-            start_parameter_services=False
-        )
         # open a snapshot stream
         if self.topic_name is None:
             # discover actual service names
             for service_name in self.service_names.keys():
                 # can raise NotFoundError and MultipleFoundError
                 self.service_names[service_name] = utilities.find_service(
-                    node=self.node,
                     service_type=self.service_type_strings[service_name],
                     namespace=self.namespace_hint,
                     timeout=timeout_sec
@@ -826,38 +660,35 @@ class Watcher(object):
             self.services["open"] = self.create_service_client(key="open")
             self.services["close"] = self.create_service_client(key="close")
             # request a stream
-            request = self.service_types["open"].Request()
+            request = self.service_types["open"]._request_class()
             request.parameters.blackboard_data = self.parameters.blackboard_data
             request.parameters.blackboard_activity = self.parameters.blackboard_activity
             request.parameters.snapshot_period = self.parameters.snapshot_period
-            future = self.services["open"].call_async(request)
-            rclpy.spin_until_future_complete(self.node, future)
-            response = future.result()
+            response = self.services["open"](request)
             self.topic_name = response.topic_name
         # connect to a snapshot stream
+        self.subscriber = rospy.Subscriber(
+            self.topic_name,
+            py_trees_msgs.BehaviourTree,
+            callback=self.callback_snapshot,
+            queue_size=1
+        )
         start_time = time.monotonic()
         while True:
             elapsed_time = time.monotonic() - start_time
             if elapsed_time > timeout_sec:
                 raise exceptions.TimedOutError("timed out waiting for a snapshot stream publisher [{}]".format(self.topic_name))
-            if self.node.count_publishers(self.topic_name) > 0:
+            if self.subscriber.get_num_connections() > 0:
                 break
             time.sleep(0.1)
-        self.subscriber = self.node.create_subscription(
-            msg_type=py_trees_msgs.BehaviourTree,
-            topic=self.topic_name,
-            callback=self.callback_snapshot,
-            qos_profile=utilities.qos_profile_latched()
-        )
 
     def shutdown(self):
+        if self.subscriber is not None:
+            self.subscriber.unregister()
         if self.services["close"] is not None:
-            request = self.service_types["close"].Request()
+            request = self.service_types["close"]._request_class()
             request.topic_name = self.topic_name
-            future = self.services["close"].call_async(request)
-            rclpy.spin_until_future_complete(self.node, future)
-            unused_response = future.result()
-        self.node.destroy_node()
+            unused_response = self.services["close"](request)
 
     def create_service_client(self, key: str):
         """
@@ -874,17 +705,14 @@ class Watcher(object):
             raise exceptions.NotReadyError(
                 "no known '{}' service known [did you call setup()?]".format(self.service_types[key])
             )
-        client = self.node.create_client(
-            srv_type=self.service_types[key],
-            srv_name=self.service_names[key],
-            qos_profile=rclpy.qos.qos_profile_services_default
-        )
         # hardcoding timeouts will get us into trouble
-        if not client.wait_for_service(timeout_sec=3.0):
+        try:
+            rospy.wait_for_service(self.service_names[key], timeout=3.0)
+        except:
             raise exceptions.TimedOutError(
                 "timed out waiting for {}".format(self.service_names['close'])
             )
-        return client
+        return rospy.ServiceProxy(self.service_names[key], self.service_types[key])
 
     def callback_snapshot(self, msg):
         """
@@ -1020,10 +848,8 @@ class Watcher(object):
                 print(
                     console.cyan + "    Timestamp: " + console.yellow +
                     "{}".format(
-                        conversions.rclpy_time_to_float(
-                            rclpy.time.Time.from_msg(
-                                msg.statistics.stamp
-                            )
+                        conversions.rospy_time_to_float(
+                            msg.statistics.stamp
                         )
                     )
                 )

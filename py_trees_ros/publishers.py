@@ -19,7 +19,7 @@ Convenience behaviours for publishing ROS messages.
 import typing
 
 import py_trees
-import rclpy.qos
+import rospy
 
 ##############################################################################
 # Behaviours
@@ -48,7 +48,6 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         publisher = py_trees_ros.publishers.FromBlackboard(
             topic_name="/foo",
             topic_type=std_msgs.msg.Empty
-            qos_profile=my_qos_profile,
             blackboard_variable="/my_message"
         )
         sequence.add_children([wait_for_data, publisher])
@@ -60,20 +59,24 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
     Args:
         topic_name: name of the topic to connect to
         topic_type: class of the message type (e.g. :obj:`std_msgs.msg.String`)
-        qos_profile: qos profile for the subscriber
-        name: name of the behaviour
         blackboard_variable: name of the variable on the blackboard (can be nested)
+        latch: whether the publisher should be latched
+        queue_size: queue size of the publisher
+        name: name of the behaviour
     """
     def __init__(self,
                  topic_name: str,
                  topic_type: typing.Any,
-                 qos_profile: rclpy.qos.QoSProfile,
                  blackboard_variable: str,
+                 latch: bool=False,
+                 queue_size: int=1,
                  name: str=py_trees.common.Name.AUTO_GENERATED,
                  ):
         super().__init__(name=name)
         self.topic_name = topic_name
         self.topic_type = topic_type
+        self.latch = latch
+        self.queue_size = queue_size
         self.blackboard = self.attach_blackboard_client(name=self.name)
         self.blackboard_variable = blackboard_variable
         self.key = blackboard_variable.split('.')[0]  # in case it is nested
@@ -82,8 +85,6 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
             access=py_trees.common.Access.READ
         )
         self.publisher = None
-        self.qos_profile = qos_profile
-        self.node = None
 
     def setup(self, **kwargs):
         """
@@ -92,19 +93,12 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         Args:
             **kwargs (:obj:`dict`): distribute arguments to this
                behaviour and in turn, all of it's children
-
-        Raises:
-            KeyError: if a ros2 node isn't passed under the key 'node' in kwargs
         """
-        try:
-            self.node = kwargs['node']
-        except KeyError as e:
-            error_message = "didn't find 'node' in setup's kwargs [{}][{}]".format(self.name, self.__class__.__name__)
-            raise KeyError(error_message) from e  # 'direct cause' traceability
-        self.publisher = self.node.create_publisher(
-            msg_type=self.topic_type,
-            topic=self.topic_name,
-            qos_profile=self.qos_profile
+        self.publisher = rospy.Publisher(
+            name=self.topic_name,
+            data_class=self.topic_type,
+            latch=self.latch,
+            queue_size=self.queue_size
         )
 
     def update(self):

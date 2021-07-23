@@ -17,7 +17,7 @@ Various behaviours that enable common interactions with ROS transforms.
 ##############################################################################
 
 import py_trees
-import rclpy.qos
+import rospy
 import tf2_ros
 
 import py_trees.console as console
@@ -44,8 +44,6 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         target_frame: name of the frame to transform into
         source_frame: name of the input frame
         static: designate whether it is a static transform or otherwise
-        qos_profile: qos profile for the non-static broadcaster
-        static_qos_profile: qos profile for the static broadcaster (default: use tf2_ros' defaults)
         name: name of the behaviour
     """
     def __init__(
@@ -54,8 +52,6 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         target_frame: str,
         source_frame: str,
         static: bool,
-        qos_profile: rclpy.qos.QoSProfile,
-        static_qos_profile: rclpy.qos.QoSProfile=None,
         name: str=py_trees.common.Name.AUTO_GENERATED,
     ):
         super().__init__(name=name)
@@ -64,8 +60,6 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         self.target_frame = target_frame
         self.source_frame = source_frame
         self.static = static
-        self.qos_profile = qos_profile
-        self.static_qos_profile = static_qos_profile
 
         self.blackboard.register_key(
             key=self.variable_name,
@@ -79,25 +73,11 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
         Args:
             **kwargs (:obj:`dict`): distribute arguments to this
                behaviour and in turn, all of it's children
-
-        Raises:
-            KeyError: if a ros2 node isn't passed under the key 'node' in kwargs
         """
-        try:
-            self.node = kwargs['node']
-        except KeyError as e:
-            error_message = "didn't find 'node' in setup's kwargs [{}][{}]".format(self.name, self.__class__.__name__)
-            raise KeyError(error_message) from e  # 'direct cause' traceability
         if self.static:
-            self.broadcaster = tf2_ros.StaticTransformBroadcaster(
-                node=self.node,
-                qos=self.static_qos_profile
-            )
+            self.broadcaster = tf2_ros.StaticTransformBroadcaster()
         else:
-            self.broadcaster = tf2_ros.TransformBroadcaster(
-                node=self.node,
-                qos=self.qos_profile
-            )
+            self.broadcaster = tf2_ros.TransformBroadcaster()
 
     def update(self):
         """
@@ -119,7 +99,7 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
             raise TypeError("'{}' is not of type geometry_msgs/Transform".format(self.variable_name))
         self.feedback_message = "transform sent"
         transform_stamped = geometry_msgs.TransformStamped()
-        transform_stamped.header.stamp = rclpy.clock.Clock().now().to_msg()
+        transform_stamped.header.stamp = rospy.Time.now()
         transform_stamped.header.frame_id = self.source_frame
         transform_stamped.child_frame_id = self.target_frame
         transform_stamped.transform = transform
@@ -159,8 +139,6 @@ class ToBlackboard(py_trees.behaviour.Behaviour):
         variable_name: name of the key to write to on the blackboard
         target_frame: name of the frame to transform into
         source_frame: name of the input frame
-        qos_profile: qos profile for the non-static subscriber
-        static_qos_profile: qos profile for the static subscriber (default: use tf2_ros' defaults)
         name: name of the behaviour
 
     Raises:
@@ -173,8 +151,6 @@ class ToBlackboard(py_trees.behaviour.Behaviour):
         variable_name,
         target_frame: str,
         source_frame: str,
-        qos_profile: rclpy.qos.QoSProfile,
-        static_qos_profile: rclpy.qos.QoSProfile=None,
         clearing_policy: py_trees.common.ClearingPolicy=py_trees.common.ClearingPolicy.ON_INITIALISE,
         name: str=py_trees.common.Name.AUTO_GENERATED,
     ):
@@ -187,8 +163,6 @@ class ToBlackboard(py_trees.behaviour.Behaviour):
         )
         self.target_frame = target_frame
         self.source_frame = source_frame
-        self.qos_profile = qos_profile
-        self.static_qos_profile = static_qos_profile
         self.clearing_policy = clearing_policy
         if self.clearing_policy == py_trees.common.ClearingPolicy.ON_SUCCESS:
             raise TypeError("ON_SUCCESS is not a valid policy for transforms.ToBlackboard")
@@ -203,21 +177,10 @@ class ToBlackboard(py_trees.behaviour.Behaviour):
         Args:
             **kwargs (:obj:`dict`): distribute arguments to this
                behaviour and in turn, all of it's children
-
-        Raises:
-            KeyError: if a ros2 node isn't passed under the key 'node' in kwargs
         """
-        try:
-            self.node = kwargs['node']
-        except KeyError as e:
-            error_message = "didn't find 'node' in setup's kwargs [{}][{}]".format(self.name, self.__class__.__name__)
-            raise KeyError(error_message) from e  # 'direct cause' traceability
         self.listener = tf2_ros.TransformListener(
             buffer=self.buffer,
-            node=self.node,
-            # spin_thread=False,
-            qos=self.qos_profile,
-            static_qos=self.static_qos_profile
+            queue_size=1
         )
 
     def initialise(self):
@@ -233,20 +196,16 @@ class ToBlackboard(py_trees.behaviour.Behaviour):
         Checks for the latest transform and posts it to the blackboard
         if available.
         """
-        class get_latest(object):
-            def __init__(self):
-                self.nanoseconds = 0.0
-
         if self.buffer.can_transform(
             target_frame=self.target_frame,
             source_frame=self.source_frame,
-            time=get_latest(),
+            time=rospy.Time(0),
             # timeout=rclpy.duration.Duration(seconds=5)  # don't block
         ):
             stamped_transform = self.buffer.lookup_transform(
                 target_frame=self.target_frame,
                 source_frame=self.source_frame,
-                time=get_latest(),
+                time=rospy.Time(0),
                 # timeout=rclpy.duration.Duration(seconds=5)  # don't block
             )
             self.blackboard.set(self.variable_name, stamped_transform)

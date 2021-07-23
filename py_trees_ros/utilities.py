@@ -21,9 +21,10 @@ import pathlib
 
 import py_trees_ros_interfaces.msg as py_trees_msgs  # noqa
 import py_trees_ros_interfaces.srv as py_trees_srvs  # noqa
-import rclpy
-import rclpy.node
-import rclpy.qos
+import rospkg
+import rospy
+import rosservice
+import rostopic
 import time
 import typing
 
@@ -34,8 +35,7 @@ from . import exceptions
 ##############################################################################
 
 
-def find_service(node: rclpy.node.Node,
-                 service_type: str,
+def find_service(service_type: str,
                  namespace: str=None,
                  timeout: float=0.5):
     """
@@ -43,7 +43,6 @@ def find_service(node: rclpy.node.Node,
     namespace.
 
     Args:
-        node (:class:`~rclpy.node.Node`): nodes have the discovery methods
         service_type (:obj:`str`): primary lookup hint
         namespace (:obj:`str`): secondary lookup hint
         timeout: immediately post node creation, can take time to discover the graph (sec)
@@ -55,24 +54,16 @@ def find_service(node: rclpy.node.Node,
         :class:`~py_trees_ros.exceptions.NotFoundError`: if no services were found
         :class:`~py_trees_ros.exceptions.MultipleFoundError`: if multiple services were found
     """
-    # TODO: follow the pattern of ros2cli to create a node without the need to init
-    # rcl (might get rid of the magic sleep this way). See:
-    #    https://github.com/ros2/ros2cli/blob/master/ros2service/ros2service/verb/list.py
-    #    https://github.com/ros2/ros2cli/blob/master/ros2cli/ros2cli/node/strategy.py
-
     loop_period = 0.1  # seconds
-    clock = rclpy.clock.Clock()
-    start_time = clock.now()
+    start_time = rospy.Time.now()
     service_names = []
-    while clock.now() - start_time < rclpy.time.Duration(seconds=timeout):
-        # Returns a list of the form: [('exchange/blackboard', ['std_msgs/String'])
-        service_names_and_types = node.get_service_names_and_types()
-        service_names = [name for name, types in service_names_and_types if service_type in types]
+    while rospy.Time.now() - start_time < rospy.Duration(secs=timeout):
+        service_names = rosservice.rosservice_find(service_type)
         if namespace is not None:
             service_names = [name for name in service_names if namespace in name]
         if service_names:
             break
-        time.sleep(loop_period)
+        rospy.sleep(loop_period)
 
     if not service_names:
         raise exceptions.NotFoundError("service not found [type: {}]".format(service_type))
@@ -83,7 +74,6 @@ def find_service(node: rclpy.node.Node,
 
 
 def find_topics(
-        node: rclpy.node.Node,
         topic_type: str,
         namespace: str=None,
         timeout: float=0.5) -> typing.List[str]:
@@ -92,7 +82,6 @@ def find_topics(
     namespace.
 
     Args:
-        node: nodes have the discovery methods
         topic_type: primary lookup hint
         namespace: secondary lookup hint
         timeout: check every 0.1s until this timeout is reached (can be None -> checks once)
@@ -102,26 +91,19 @@ def find_topics(
     Returns:
         list of fully expanded topic names (can be empty)
     """
-    # TODO: follow the pattern of ros2cli to create a node without the need to init
-    # rcl (might get rid of the magic sleep this way). See:
-    #    https://github.com/ros2/ros2cli/blob/master/ros2service/ros2service/verb/list.py
-    #    https://github.com/ros2/ros2cli/blob/master/ros2cli/ros2cli/node/strategy.py
     loop_period = 0.1  # seconds
-    clock = rclpy.clock.Clock()
-    start_time = clock.now()
+    start_time = rospy.Time.now()
     topic_names = []
     while True:
-        # Returns a list of the form: [('exchange/blackboard', ['std_msgs/String'])
-        topic_names_and_types = node.get_topic_names_and_types()
-        topic_names = [name for name, types in topic_names_and_types if topic_type in types]
+        topic_names = rostopic.find_by_type(topic_type)
         if namespace is not None:
             topic_names = [name for name in topic_names if namespace in name]
         if topic_names:
             break
-        if timeout is None or (clock.now() - start_time) > rclpy.time.Duration(seconds=timeout):
+        if timeout is None or (rospy.Time.now() - start_time) > rospy.Duration(secs=timeout):
             break
         else:
-            time.sleep(loop_period)
+            rospy.sleep(loop_period)
     return topic_names
 
 
@@ -151,52 +133,21 @@ def get_py_trees_home():
     Find the default home directory used for logging, bagging and other
     esoterica.
     """
-    # TODO: update with replacement for rospkg.get_ros_home() when it arrives
-    home = os.path.join(str(pathlib.Path.home()), ".ros2", "py_trees")
-    return home
+    return os.path.join(rospkg.get_ros_home(), "py_trees")
 
 
-def qos_profile_latched():
-    """
-    Convenience retrieval for a latched topic (publisher / subscriber)
-    """
-    return rclpy.qos.QoSProfile(
-        history=rclpy.qos.QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
-        depth=1,
-        durability=rclpy.qos.QoSDurabilityPolicy.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL,
-        reliability=rclpy.qos.QoSReliabilityPolicy.RMW_QOS_POLICY_RELIABILITY_RELIABLE
-    )
-
-
-def qos_profile_unlatched():
-    """
-    Default profile for an unlatched topic (in py_trees_ros).
-    """
-    return rclpy.qos.QoSProfile(
-        history=rclpy.qos.QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
-        depth=1,
-        durability=rclpy.qos.QoSDurabilityPolicy.RMW_QOS_POLICY_DURABILITY_VOLATILE,
-        reliability=rclpy.qos.QoSReliabilityPolicy.RMW_QOS_POLICY_RELIABILITY_RELIABLE
-    )
-
-
-def resolve_name(node, name):
+def resolve_name(name):
     """
     Convenience function for getting the resolved name (similar to 'publisher.resolved_name' in ROS1).
 
     Args:
-        node (:class:`rclpy.node.Node`): the node, namespace it *should* be relevant to
         name (obj:`str`): topic or service name
 
     .. note::
 
        This entirely depends on the user providing the relevant node, name pair.
     """
-    return rclpy.expand_topic_name.expand_topic_name(
-        name,
-        node.get_name(),
-        node.get_namespace()
-    )
+    return rospy.resolve_name(name)
 
 
 def create_anonymous_node_name(node_name="node") -> str:
@@ -237,24 +188,14 @@ class Publishers(object):
                ]
            )
     """
-    def __init__(self, node, publisher_details, introspection_topic_name="publishers"):
+    def __init__(self, publisher_details, introspection_topic_name="publishers"):
         # TODO: check for the correct setting of publisher_details
         self.publisher_details_msg = []
         for (name, topic_name, publisher_type, latched) in publisher_details:
-            if latched:
-                self.__dict__[name] = node.create_publisher(
-                    msg_type=publisher_type,
-                    topic=topic_name,
-                    qos_profile=qos_profile_latched()
-                )
-            else:
-                self.__dict__[name] = node.create_publisher(
-                    msg_type=publisher_type,
-                    topic=topic_name,
-                    qos_profile=qos_profile_unlatched()
-                )
-            resolved_name = resolve_name(node, topic_name)
-            message_type = publisher_type.__class__.__module__.split('.')[0] + "/" + publisher_type.__class__.__name__
+            self.__dict__[name] = rospy.Publisher(topic_name, publisher_type, latch=latched, queue_size=1)
+
+            resolved_name = resolve_name(topic_name)
+            message_type = publisher_type.__module__.split('.')[0] + "/" + publisher_type.__name__
             self.publisher_details_msg.append(
                 py_trees_msgs.PublisherDetails(
                     topic_name=resolved_name,
@@ -263,13 +204,14 @@ class Publishers(object):
                 )
             )
 
-        self.introspection_service = node.create_service(
-            py_trees_srvs.IntrospectPublishers,
-            "~/introspection/" + introspection_topic_name,
-            self.introspection_callback
+        self.introspection_service = rospy.Service(
+            name="~/introspection/" + introspection_topic_name,
+            service_class=py_trees_srvs.IntrospectPublishers,
+            handler=self.introspection_callback
         )
 
-    def introspection_callback(self, unused_request, response):
+    def introspection_callback(self, unused_request):
+        response = py_trees_srvs.IntrospectPublishersResponse()
         response.publisher_details = self.publisher_details_msg
         return response
 
@@ -296,27 +238,14 @@ class Subscribers(object):
                ]
            )
     """
-    def __init__(self, node, subscriber_details, introspection_topic_name="subscribers"):
+    def __init__(self, subscriber_details, introspection_topic_name="subscribers"):
         # TODO: check for the correct setting of subscriber_details
         self.subscriber_details_msg = []
         for (name, topic_name, subscriber_type, latched, callback) in subscriber_details:
-            if latched:
-                self.__dict__[name] = node.create_subscription(
-                    msg_type=subscriber_type,
-                    topic=topic_name,
-                    callback=callback,
-                    qos_profile=qos_profile_latched()
-                )
-            else:
-                self.__dict__[name] = node.create_subscription(
-                    msg_type=subscriber_type,
-                    topic=topic_name,
-                    callback=callback,
-                    qos_profile=qos_profile_unlatched()
-                )
+            self.__dict__[name] = rospy.Subscriber(topic_name, subscriber_type, callback=callback)
 
-            resolved_name = resolve_name(node, topic_name)
-            message_type = subscriber_type.__class__.__module__.split('.')[0] + "/" + subscriber_type.__class__.__name__
+            resolved_name = resolve_name(topic_name)
+            message_type = subscriber_type.__module__.split('.')[0] + "/" + subscriber_type.__name__
             self.subscriber_details_msg.append(
                 py_trees_msgs.SubscriberDetails(
                     topic_name=resolved_name,
@@ -325,13 +254,14 @@ class Subscribers(object):
                 )
             )
 
-        self.introspection_service = node.create_service(
-            py_trees_srvs.IntrospectSubscribers,
-            "~/introspection/" + introspection_topic_name,
-            self.introspection_callback
+        self.introspection_service = rospy.Service(
+            name="~/introspection/" + introspection_topic_name,
+            service_class=py_trees_srvs.IntrospectSubscribers,
+            handler=self.introspection_callback
         )
 
-    def introspection_callback(self, unused_request, response):
+    def introspection_callback(self, unused_request):
+        response = py_trees_srvs.IntrospectSubscribersResponse()
         response.subscriber_details = self.subscriber_details_msg
         return response
 
@@ -358,18 +288,14 @@ class Services(object):
                ]
            )
     """
-    def __init__(self, node, service_details, introspection_topic_name="services"):
+    def __init__(self, service_details, introspection_topic_name="services"):
         # TODO: check for the correct setting of subscriber_details
         self.service_details_msg = []
         for (name, service_name, service_type, callback) in service_details:
-            self.__dict__[name] = node.create_service(
-                srv_type=service_type,
-                srv_name=service_name,
-                callback=callback,
-                qos_profile=rclpy.qos.qos_profile_services_default
-            )
-            resolved_name = resolve_name(node, service_name)
-            service_type = service_type.__class__.__module__.split('.')[0] + "/" + service_type.__class__.__name__
+            self.__dict__[name] = rospy.Service(service_name, service_type, callback)
+
+            resolved_name = resolve_name(service_name)
+            service_type = service_type.__module__.split('.')[0] + "/" + service_type.__name__
             self.service_details_msg.append(
                 py_trees_msgs.ServiceDetails(
                     service_name=resolved_name,
@@ -377,12 +303,13 @@ class Services(object):
                 )
             )
 
-        self.introspection_service = node.create_service(
-            py_trees_srvs.IntrospectServices,
-            "~/introspection/" + introspection_topic_name,
-            self.introspection_callback
+        self.introspection_service = rospy.Service(
+            name="~/introspection/" + introspection_topic_name,
+            service_class=py_trees_srvs.IntrospectServices,
+            handler=self.introspection_callback
         )
 
-    def introspection_callback(self, unused_request, response):
+    def introspection_callback(self, unused_request):
+        response = py_trees_srvs.IntrospectServicesResponse()
         response.subscriber_details = self.subscriber_details_msg
         return response

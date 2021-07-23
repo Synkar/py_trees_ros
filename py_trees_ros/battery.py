@@ -17,7 +17,7 @@ Getting the most out of your battery.
 ##############################################################################
 
 import py_trees
-import rclpy.qos
+import rospy
 import sensor_msgs.msg as sensor_msgs
 
 from . import subscribers
@@ -43,19 +43,19 @@ class ToBlackboard(subscribers.ToBlackboard):
 
     Args:
         topic_name: name of the battery state topic
-        qos_profile: qos profile for the subscriber
+        queue_size: queue size of the subscriber
         name: name of the behaviour
         threshold: percentage level threshold for flagging as low (0-100)
     """
     def __init__(self,
                  topic_name: str,
-                 qos_profile: rclpy.qos.QoSProfile,
+                 queue_size: int=1,
                  name: str=py_trees.common.Name.AUTO_GENERATED,
                  threshold: float=30.0):
         super().__init__(name=name,
                          topic_name=topic_name,
                          topic_type=sensor_msgs.BatteryState,
-                         qos_profile=qos_profile,
+                         queue_size=queue_size,
                          blackboard_variables={"battery": None},
                          clearing_policy=py_trees.common.ClearingPolicy.NEVER
                          )
@@ -86,7 +86,7 @@ class ToBlackboard(subscribers.ToBlackboard):
             elif self.blackboard.battery.percentage < self.threshold:
                     self.blackboard.battery_low_warning = True
                     # TODO: make this throttled
-                    self.node.get_logger().error("{}: battery level is low!".format(self.name))
+                    rospy.logerr_throttle(2.0, "{}: battery level is low!".format(self.name))
             # else don't do anything in between - i.e. avoid the ping pong problems
 
             self.feedback_message = "Battery level is low" if self.blackboard.battery_low_warning else "Battery level is ok"

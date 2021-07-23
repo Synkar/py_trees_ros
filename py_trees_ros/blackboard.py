@@ -26,8 +26,7 @@ import pickle
 import py_trees
 import py_trees.console as console
 import py_trees_ros_interfaces.srv as py_trees_srvs  # noqa
-import rclpy.expand_topic_name
-import rclpy.node
+import rospy
 import std_msgs.msg as std_msgs
 import typing
 import uuid
@@ -46,15 +45,11 @@ class SubBlackboard(object):
     flag when there have been changes. This is a nice to have that only
     works if the blackboard contains fundamental variables (i.e. objects
     that can be pickled).
-
-    Args:
-        node: the node handle for ros logging of warnings if needed
     """
-    def __init__(self, node: rclpy.node.Node):
+    def __init__(self):
         self.is_changed = False
         self.variable_names = set()
         self.pickled_storage = None
-        self.node = node
         self.warned = False
 
     def update(self, variable_names: typing.Set[str]):
@@ -68,9 +63,9 @@ class SubBlackboard(object):
         """
         def handle_pickling_error():
             if not self.warned:
-                self.node.get_logger().warning("You have objects on the blackboard that can't be pickled.")
-                self.node.get_logger().warning("Any blackboard watchers will always receive updates,")
-                self.node.get_logger().warning("regardless of whether the data changed or not")
+                rospy.logwarn("You have objects on the blackboard that can't be pickled.")
+                rospy.logwarn("Any blackboard watchers will always receive updates,")
+                rospy.logwarn("regardless of whether the data changed or not")
                 self.warned = True
             self.pickled_storage = None
             self.is_changed = True
@@ -143,7 +138,6 @@ class BlackboardView(object):
     """
     def __init__(
             self,
-            node: rclpy.node.Node,
             topic_name: str,
             variable_names: typing.Set[str],
             filter_on_visited_path: bool,
@@ -151,14 +145,9 @@ class BlackboardView(object):
     ):
         self.topic_name = topic_name
         self.variable_names = variable_names
-        self.sub_blackboard = SubBlackboard(node=node)
+        self.sub_blackboard = SubBlackboard()
         self.sub_activity_stream = py_trees.blackboard.ActivityStream()
-        self.node = node
-        self.publisher = self.node.create_publisher(
-            msg_type=std_msgs.String,
-            topic=topic_name,
-            qos_profile=utilities.qos_profile_latched()
-        )
+        self.publisher = rospy.Publisher(topic_name, std_msgs.String, latch=True, queue_size=1)
         self.filter_on_visited_path = filter_on_visited_path
         self.with_activity_stream = with_activity_stream
         self.tracked_variable_names = set()
@@ -168,7 +157,7 @@ class BlackboardView(object):
         """
         Shutdown the temporarily created publisher.
         """
-        self.node.destroy_publisher(self.publisher)
+        self.publisher.unregister()
 
     def is_changed(self, visited_clients: typing.Set[uuid.UUID]) -> bool:
         """
@@ -262,21 +251,17 @@ class Exchange(object):
     """Incremental counter guaranteeing unique watcher names"""
 
     def __init__(self):
-        self.node = None
         self.views = []
         self.services = {}
         self.activity_stream_clients = 0
 
-    def setup(self, node: rclpy.node.Node):
+    def setup(self):
         """
         This is where the ros initialisation of publishers and services happens. It is kept
         outside of the constructor for the same reasons that the familiar py_trees
         :meth:`~py_trees.trees.BehaviourTree.setup` method has - to enable construction
         of behaviours and trees offline (away from their execution environment) so that
         dot graphs and other visualisations of the tree can be created.
-
-        Args:
-            node (:class:`~rclpy.node.Node`): node to hook ros communications on
 
         Examples:
 
@@ -296,17 +281,15 @@ class Exchange(object):
 
         .. seealso:: This class is used as illustrated above in :class:`~py_trees_ros.trees.BehaviourTree`.
         """
-        self.node = node
         for service_name, service_type in [
             ("get_variables", py_trees_srvs.GetBlackboardVariables),
             ("open", py_trees_srvs.OpenBlackboardStream),
             ("close", py_trees_srvs.CloseBlackboardStream)
         ]:
-            self.services[service_name] = self.node.create_service(
-                srv_type=service_type,
-                srv_name='~/blackboard_streams/' + service_name,
-                callback=getattr(self, "_{}_service".format(service_name)),
-                qos_profile=rclpy.qos.qos_profile_services_default
+            self.services[service_name] = rospy.Service(
+                name='~/blackboard_streams/' + service_name,
+                service_class=service_type,
+                handler=getattr(self, "_{}_service".format(service_name))
             )
 
     def _get_nested_keys(self):
@@ -343,7 +326,7 @@ class Exchange(object):
         # update watcher views and publish
         if len(self.views) > 0:
             for view in self.views:
-                if self.node.count_subscribers(view.topic_name) > 0:
+                if view.publisher.get_num_connections() > 0:
                     if view.is_changed(visited_client_ids):  # update in here
                         msg = std_msgs.String()
                         if view.with_activity_stream:
@@ -371,7 +354,8 @@ class Exchange(object):
     def unregister_activity_stream_client(self):
         self.activity_stream_clients -= 1
 
-    def _close_service(self, request, response):
+    def _close_service(self, request):
+        response = py_trees_srvs.CloseBlackboardStreamResponse()
         response.result = False
         for view in self.views:
             if view.topic_name == request.topic_name:
@@ -383,20 +367,18 @@ class Exchange(object):
         self.views[:] = [view for view in self.views if view.topic_name != request.topic_name]
         return response
 
-    def _get_variables_service(self, unused_request, response):
+    def _get_variables_service(self, unused_request):
+        response = py_trees_srvs.GetBlackboardVariablesResponse()
         response.variables = self._get_nested_keys()
         return response
 
-    def _open_service(self, request, response):
-        response.topic = rclpy.expand_topic_name.expand_topic_name(
-            topic_name="~/blackboard_streams/_watcher_" + str(Exchange._counter),
-            node_name=self.node.get_name(),
-            node_namespace=self.node.get_namespace())
+    def _open_service(self, request):
+        response = py_trees_srvs.OpenBlackboardStreamResponse()
+        response.topic = rospy.resolve_name("~/blackboard_streams/_watcher_" + str(Exchange._counter))
         Exchange._counter += 1
         if request.with_activity_stream:
             self.register_activity_stream_client()
         view = BlackboardView(
-            node=self.node,
             topic_name=response.topic,
             variable_names=set(request.variables),
             filter_on_visited_path=request.filter_on_visited_path,
@@ -429,15 +411,16 @@ class BlackboardWatcher(object):
             'close': None
         }
         self.service_type_strings = {
-            'list': 'py_trees_ros_interfaces/srv/GetBlackboardVariables',
-            'open': 'py_trees_ros_interfaces/srv/OpenBlackboardStream',
-            'close': 'py_trees_ros_interfaces/srv/CloseBlackboardStream'
+            'list': 'py_trees_ros_interfaces/GetBlackboardVariables',
+            'open': 'py_trees_ros_interfaces/OpenBlackboardStream',
+            'close': 'py_trees_ros_interfaces/CloseBlackboardStream'
         }
         self.service_types = {
             'list': py_trees_srvs.GetBlackboardVariables,
             'open': py_trees_srvs.OpenBlackboardStream,
             'close': py_trees_srvs.CloseBlackboardStream
         }
+        py_trees_srvs.GetBlackboardVariables._request_class
 
     def setup(self, timeout_sec: float):
         """
@@ -451,14 +434,9 @@ class BlackboardWatcher(object):
             :class:`~py_trees_ros.exceptions.NotFoundError`: if no services were found
             :class:`~py_trees_ros.exceptions.MultipleFoundError`: if multiple services were found
         """
-        self.node = rclpy.create_node(
-            node_name=utilities.create_anonymous_node_name(node_name='watcher'),
-            start_parameter_services=False
-        )
         for service_name in self.service_names.keys():
             # can raise NotFoundError and MultipleFoundError
             self.service_names[service_name] = utilities.find_service(
-                node=self.node,
                 service_type=self.service_type_strings[service_name],
                 namespace=self.namespace_hint,
                 timeout=timeout_sec
@@ -479,17 +457,14 @@ class BlackboardWatcher(object):
             raise exceptions.NotReadyError(
                 "no known '{}' service known [did you call setup()?]".format(self.service_types[key])
             )
-        client = self.node.create_client(
-            srv_type=self.service_types[key],
-            srv_name=self.service_names[key],
-            qos_profile=rclpy.qos.qos_profile_services_default
-        )
         # hardcoding timeouts will get us into trouble
-        if not client.wait_for_service(timeout_sec=3.0):
+        try:
+            rospy.wait_for_service(self.service_names[key], timeout=3.0)
+        except:
             raise exceptions.TimedOutError(
                 "timed out waiting for {}".format(self.service_names['close'])
             )
-        return (self.service_types[key].Request(), client)
+        return (self.service_types[key]._request_class(), rospy.ServiceProxy(self.service_names[key], self.service_types[key]))
 
     def echo_blackboard_contents(self, msg: std_msgs.String):
         """
@@ -504,5 +479,4 @@ class BlackboardWatcher(object):
         """
         Perform any ros-specific shutdown.
         """
-        if self.node:
-            self.node.destroy_node()
+        pass

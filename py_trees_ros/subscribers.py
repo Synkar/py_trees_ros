@@ -31,7 +31,7 @@ import threading
 import typing
 
 import py_trees
-import rclpy.qos
+import rospy
 import std_msgs.msg as std_msgs
 
 ##############################################################################
@@ -75,26 +75,25 @@ class Handler(py_trees.behaviour.Behaviour):
     Args:
         topic_name: name of the topic to connect to
         topic_type: class of the message type (e.g. :obj:`std_msgs.msg.String`)
-        qos_profile: qos profile for the subscriber
+        queue_size: queue size the subscriber
         name: name of the behaviour
         clearing_policy: when to clear the data
     """
     def __init__(self,
                  topic_name: str,
                  topic_type: typing.Any,
-                 qos_profile: rclpy.qos.QoSProfile,
+                 queue_size: int=1,
                  name: str=py_trees.common.Name.AUTO_GENERATED,
                  clearing_policy: py_trees.common.ClearingPolicy=py_trees.common.ClearingPolicy.ON_INITIALISE
                  ):
         super(Handler, self).__init__(name=name)
         self.topic_name = topic_name
         self.topic_type = topic_type
+        self.queue_size = queue_size
         self.msg = None
         self.subscriber = None
         self.data_guard = threading.Lock()
         self.clearing_policy = clearing_policy
-        self.qos_profile = qos_profile
-        self.node = None
 
     def setup(self, **kwargs):
         """
@@ -103,20 +102,12 @@ class Handler(py_trees.behaviour.Behaviour):
         Args:
             **kwargs (:obj:`dict`): distribute arguments to this
                behaviour and in turn, all of it's children
-
-        Raises:
-            KeyError: if a ros2 node isn't passed under the key 'node' in kwargs
         """
-        try:
-            self.node = kwargs['node']
-        except KeyError as e:
-            error_message = "didn't find 'node' in setup's kwargs [{}][{}]".format(self.name, self.__class__.__name__)
-            raise KeyError(error_message) from e  # 'direct cause' traceability
-        self.subscriber = self.node.create_subscription(
-            msg_type=self.topic_type,
-            topic=self.topic_name,
+        self.subscriber = rospy.Subscriber(
+            name=self.topic_name,
+            data_class=self.topic_type,
             callback=self._callback,
-            qos_profile=self.qos_profile
+            queue_size=self.queue_size
         )
 
     def initialise(self):
@@ -162,9 +153,9 @@ class CheckData(Handler):
     Args:
         topic_name: name of the topic to connect to
         topic_type: class of the message type (e.g. :obj:`std_msgs.msg.String`)
-        qos_profile: qos profile for the subscriber
         variable_name: name of the variable to check
         expected_value: expected value of the variable
+        queue_size: queue size of the subscriber
         comparison_operator: one from the python `operator module`_
         fail_if_no_data: :attr:`~py_trees.common.Status.FAILURE` instead of :attr:`~py_trees.common.Status.RUNNING` if there is no data yet
         fail_if_bad_comparison: :attr:`~py_trees.common.Status.FAILURE` instead of :attr:`~py_trees.common.Status.RUNNING` if comparison failed
@@ -182,9 +173,9 @@ class CheckData(Handler):
     def __init__(self,
                  topic_name: str,
                  topic_type: typing.Any,
-                 qos_profile: rclpy.qos.QoSProfile,
                  variable_name: str,
                  expected_value: typing.Any,
+                 queue_size: int=1,
                  comparison_operator=operator.eq,
                  fail_if_no_data=False,
                  fail_if_bad_comparison=False,
@@ -195,7 +186,7 @@ class CheckData(Handler):
             name=name,
             topic_name=topic_name,
             topic_type=topic_type,
-            qos_profile=qos_profile,
+            queue_size=queue_size,
             clearing_policy=clearing_policy,
         )
         self.variable_name = variable_name
@@ -222,7 +213,7 @@ class CheckData(Handler):
         try:
             value = check_attr(msg)
         except AttributeError:
-            self.node.get_logger().error("Behaviour [{}]: variable name not found [{}]".format(self.name, self.variable_name))
+            rospy.logerr("Behaviour [{}]: variable name not found [{}]".format(self.name, self.variable_name))
             print("{}".format(msg))
             with self.data_guard:
                 self.feedback_message = "variable name not found [{}]".format(self.variable_name)
@@ -278,14 +269,14 @@ class WaitForData(Handler):
     Args:
         topic_name: name of the topic to connect to
         topic_type: class of the message type (e.g. :obj:`std_msgs.msg.String`)
-        qos_profile: qos profile for the subscriber
+        queue_size: queue size of the subscriber
         name: name of the behaviour
         clearing_policy: when to clear the data
     """
     def __init__(self,
                  topic_name: str,
                  topic_type: typing.Any,
-                 qos_profile: rclpy.qos.QoSProfile,
+                 queue_size: int=1,
                  name=py_trees.common.Name.AUTO_GENERATED,
                  clearing_policy=py_trees.common.ClearingPolicy.ON_INITIALISE
                  ):
@@ -293,7 +284,7 @@ class WaitForData(Handler):
             name=name,
             topic_name=topic_name,
             topic_type=topic_type,
-            qos_profile=qos_profile,
+            queue_size=queue_size,
             clearing_policy=clearing_policy
         )
 
@@ -326,7 +317,7 @@ class ToBlackboard(Handler):
     Args:
         topic_name: name of the topic to connect to
         topic_type: class of the message type (e.g. :obj:`std_msgs.msg.String`)
-        qos_profile: qos profile for the subscriber
+        queue_size: queue size of the subscriber
         blackboard_variables: blackboard variable string or dict {names (keys) - message subfields (values)}, use a value of None to indicate the entire message
         initialise_variables: initialise the blackboard variables to some defaults
         name: name of the behaviour
@@ -361,7 +352,7 @@ class ToBlackboard(Handler):
     def __init__(self,
                  topic_name: str,
                  topic_type: typing.Any,
-                 qos_profile: rclpy.qos.QoSProfile,
+                 queue_size: int=1,
                  blackboard_variables: typing.Dict[str, typing.Any]={},  # e.g. {"chatter": None}
                  initialise_variables: typing.Dict[str, typing.Any]={},
                  name=py_trees.common.Name.AUTO_GENERATED,
@@ -371,7 +362,7 @@ class ToBlackboard(Handler):
             name=name,
             topic_name=topic_name,
             topic_type=topic_type,
-            qos_profile=qos_profile,
+            queue_size=queue_size,
             clearing_policy=clearing_policy
         )
         self.blackboard = self.attach_blackboard_client(name=self.name)
@@ -446,13 +437,11 @@ class EventToBlackboard(Handler):
 
     Args:
         topic_name: name of the topic to connect to
-        qos_profile: qos profile for the subscriber
         variable_name: name to write the boolean result on the blackboard
         name: name of the behaviour
     """
     def __init__(self,
                  topic_name: str,
-                 qos_profile: rclpy.qos.QoSProfile,
                  variable_name: str,
                  name=py_trees.common.Name.AUTO_GENERATED,
                  ):
@@ -460,7 +449,6 @@ class EventToBlackboard(Handler):
             name=name,
             topic_name=topic_name,
             topic_type=std_msgs.Empty,
-            qos_profile=qos_profile,
             clearing_policy=py_trees.common.ClearingPolicy.ON_SUCCESS
         )
         self.variable_name = variable_name

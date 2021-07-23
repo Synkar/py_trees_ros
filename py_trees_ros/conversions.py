@@ -19,7 +19,7 @@ py_trees objects and ros messages.
 
 import py_trees
 import py_trees_ros_interfaces.msg  # noqa
-import rclpy
+import rospy
 import typing
 import unique_identifier_msgs.msg
 import uuid
@@ -349,7 +349,7 @@ def msg_to_behaviour(msg: py_trees_ros_interfaces.msg.Behaviour) -> py_trees.beh
     return behaviour
 
 
-def rclpy_time_to_float(time: rclpy.time.Time) -> float:
+def rospy_time_to_float(time: rospy.Time) -> float:
     """
     Convert a ros2 time (seconds/nanoseconds) to a float.
 
@@ -359,10 +359,10 @@ def rclpy_time_to_float(time: rclpy.time.Time) -> float:
     Return:
         time (seconds) as a float
     """
-    return float(time.nanoseconds) / 1e9
+    return time.to_sec()
 
 
-def rclpy_duration_to_float(duration: rclpy.time.Duration) -> float:
+def rospy_duration_to_float(duration: rospy.Duration) -> float:
     """
     Convert a ros2 duration (seconds/nanoseconds) to a float.
 
@@ -372,4 +372,4 @@ def rclpy_duration_to_float(duration: rclpy.time.Duration) -> float:
     Return:
         time (seconds) as a float
     """
-    return float(duration.nanoseconds) / 1e9
+    return duration.to_sec()
