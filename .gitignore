@@ -7,7 +7,7 @@ py_trees_ros.egg-info
 build
 dist
 deb_dist
-py_trees*.tar.gz 
+py_trees*.tar.gz
 *~
 \#*
 .#*
@@ -18,5 +18,3 @@ py_trees*.tar.gz
 # Generated files (when debugging)
 py_trees_ros/resources/*.py
 html
-
-scripts

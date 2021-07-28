@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from py_trees_ros.programs.blackboard_watcher import main
+
+main()

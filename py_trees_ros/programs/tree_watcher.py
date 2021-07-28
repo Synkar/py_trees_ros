@@ -32,7 +32,7 @@ import argparse
 import py_trees
 import py_trees.console as console
 import py_trees_ros
-import rclpy
+import rospy
 import sys
 
 ##############################################################################
@@ -164,8 +164,8 @@ def main():
     # Arg Parsing
     ####################
 
-    # command_line_args = rclpy.utilities.remove_ros_args(command_line_args)[1:]
-    command_line_args = None
+    command_line_args = rospy.myargv(sys.argv)[1:]
+    # command_line_args = None
     parser = command_line_argument_parser(formatted_for_sphinx=False)
     args = parser.parse_args(command_line_args)
 
@@ -185,10 +185,18 @@ def main():
         statistics=args.statistics,
     )
 
+    def close_watcher():
+        if tree_watcher.xdot_process is not None:
+            if tree_watcher.xdot_process.poll() is not None:
+                tree_watcher.xdot_process.terminate()
+        tree_watcher.shutdown()
+
+    rospy.on_shutdown(close_watcher)
+
     ####################
     # Setup
     ####################
-    rclpy.init(args=None)
+    rospy.init_node('tree_watcher', anonymous=True)
     try:
         tree_watcher.setup(timeout_sec=5.0)
     # setup discovery fails
@@ -210,11 +218,9 @@ def main():
     ####################
     # Execute
     ####################
-    executor = rclpy.executors.SingleThreadedExecutor()
-    executor.add_node(node=tree_watcher.node)
     try:
         while True:
-            if not rclpy.ok():
+            if rospy.is_shutdown():
                 break
             if tree_watcher.done:
                 if tree_watcher.xdot_process is None:
@@ -223,12 +229,13 @@ def main():
                 elif tree_watcher.xdot_process.poll() is not None:
                     # xdot running, wait for it to terminate
                     break
-            executor.spin_once(timeout_sec=0.1)
+            rospy.sleep(0.1)
     except KeyboardInterrupt:
         pass
     finally:
-        if tree_watcher.xdot_process is not None:
-            if tree_watcher.xdot_process.poll() is not None:
-                tree_watcher.xdot_process.terminate()
-        tree_watcher.shutdown()
-        rclpy.shutdown()
+        if not rospy.is_shutdown():
+            if tree_watcher.xdot_process is not None:
+                if tree_watcher.xdot_process.poll() is not None:
+                    tree_watcher.xdot_process.terminate()
+            tree_watcher.shutdown()
+            rospy.signal_shutdown('application finished')

@@ -17,7 +17,7 @@ Mocks a docking controller
 # Imports
 ##############################################################################
 
-import py_trees_ros_interfaces.action as py_trees_actions
+import py_trees_ros_interfaces.msg as py_trees_msgs
 
 from . import actions
 
@@ -34,7 +34,7 @@ class Dock(actions.GenericServer):
         super().__init__(
             node_name="docking_controller",
             action_name="dock",
-            action_type=py_trees_actions.Dock,
+            action_type=py_trees_msgs.DockAction,
             generate_feedback_message=self.generate_feedback_message,
             goal_received_callback=self.goal_received_callback,
             duration=duration
@@ -51,7 +51,7 @@ class Dock(actions.GenericServer):
         Create some appropriate feedback.
         """
         # TODO: send some feedback message
-        msg = py_trees_actions.Dock.Feedback(  # noqa
+        msg = py_trees_msgs.DockFeedback(  # noqa
             percentage_completed=self.percent_completed
         )
         return msg

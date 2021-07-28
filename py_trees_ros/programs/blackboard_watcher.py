@@ -26,7 +26,7 @@ Example interaction with the services of an :class:`py_trees_ros.blackboard.Exch
 import argparse
 import py_trees.console as console
 import py_trees_ros
-import rclpy
+import rospy
 import std_msgs.msg as std_msgs
 import sys
 
@@ -129,10 +129,11 @@ def main(command_line_args=sys.argv[1:]):
     parser = command_line_argument_parser(formatted_for_sphinx=False)
     args = parser.parse_args(command_line_args)
 
-    rclpy.init(args=None)
+    rospy.init_node('blackboard_watcher', anonymous=True)
     blackboard_watcher = py_trees_ros.blackboard.BlackboardWatcher(
         namespace_hint=args.namespace
     )
+    watcher_topic_name = None
     subscription = None
     ####################
     # Setup
@@ -152,6 +153,20 @@ def main(command_line_args=sys.argv[1:]):
             print(console.red + "\nERROR: but none matching the requested '{}'\n".format(args.namespace) + console.reset)
         sys.exit(1)
 
+    def close_connection():
+        if subscription is not None:
+            subscription.unregister()
+
+        if watcher_topic_name is not None:
+            request, client = blackboard_watcher.create_service_client('close')
+            request.topic_name = watcher_topic_name
+            try:
+                response = client(request)
+            except rospy.ServiceException as e:
+                raise py_trees_ros.exceptions.ServiceError(
+                    "service call to close connection failed [{}]".format(e)
+                ) from e
+
     ####################
     # Execute
     ####################
@@ -159,48 +174,33 @@ def main(command_line_args=sys.argv[1:]):
     try:
         if args.list:
             request, client = blackboard_watcher.create_service_client('list')
-            future = client.call_async(request)
-            rclpy.spin_until_future_complete(blackboard_watcher.node, future)
-            if future.result() is None:
-                raise py_trees_ros.exceptions.ServiceError(
-                    "service call failed [{}]".format(future.exception())
-                )
-            pretty_print_variables(future.result().variables)
+            result = client(request)
+            pretty_print_variables(result.variables)
         else:
             # request connection
             request, client = blackboard_watcher.create_service_client('open')
             request.variables = [variable.strip(',[]') for variable in args.variables]
             request.filter_on_visited_path = args.visited
             request.with_activity_stream = args.activity
-            future = client.call_async(request)
-            rclpy.spin_until_future_complete(blackboard_watcher.node, future)
-            response = future.result()
-            blackboard_watcher.node.destroy_client(client)
+            response = client(request)
+            client.close()
+            rospy.on_shutdown(close_connection)
             # connect
             watcher_topic_name = response.topic
-            blackboard_watcher.node.get_logger().info(
+            rospy.loginfo(
                 "creating subscription [{}]".format(watcher_topic_name)
             )
-            subscription = blackboard_watcher.node.create_subscription(
-                msg_type=std_msgs.String,
-                topic=watcher_topic_name,
+            subscription = rospy.Subscriber(
+                watcher_topic_name,
+                std_msgs.String,
                 callback=blackboard_watcher.echo_blackboard_contents,
-                qos_profile=py_trees_ros.utilities.qos_profile_unlatched()
+                queue_size=1
             )
             # stream
             try:
-                rclpy.spin(blackboard_watcher.node)
+                rospy.spin()
             except KeyboardInterrupt:
                 pass
-            # close connection
-            request, client = blackboard_watcher.create_service_client('close')
-            request.topic_name = watcher_topic_name
-            future = client.call_async(request)
-            rclpy.spin_until_future_complete(blackboard_watcher.node, future)
-            if future.result() is None:
-                raise py_trees_ros.exceptions.ServiceError(
-                    "service call to close connection failed [{}]".format(future.exception())
-                )
     # connection problems
     except (py_trees_ros.exceptions.NotReadyError,
             py_trees_ros.exceptions.ServiceError,
@@ -208,7 +208,7 @@ def main(command_line_args=sys.argv[1:]):
         print(console.red + "\nERROR: {}".format(str(e)) + console.reset)
         result = 1
     if subscription is not None:
-        blackboard_watcher.node.destroy_subscription(subscription)
+        subscription.unregister()
     blackboard_watcher.shutdown()
-    rclpy.shutdown()
+    rospy.signal_shutdown('Application finished')
     sys.exit(result)
