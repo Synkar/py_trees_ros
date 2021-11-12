@@ -113,13 +113,13 @@ class SnapshotStream(object):
             the expanded topic name
         """
         if topic_name is None or not topic_name:
-            expanded_topic_name = rospy.resolve_name("~/snapshot_streams/_snapshots_" + str(SnapshotStream._counter))
+            expanded_topic_name = rospy.resolve_name("~snapshot_streams/_snapshots_" + str(SnapshotStream._counter))
             SnapshotStream._counter += 1
             return expanded_topic_name
         elif topic_name.startswith("~"):
             return rospy.resolve_name(topic_name)
         elif not topic_name.startswith("/"):
-            return rospy.resolve_name("~/snapshot_streams/" + topic_name)
+            return rospy.resolve_name("~snapshot_streams/" + topic_name)
         else:
             return topic_name
 
@@ -199,7 +199,7 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
     a few bells and whistles for ROS.
 
     ROS Parameters:
-        * **default_snapshot_stream**: enable/disable the default snapshots stream in ~/snapshots` (default: False)
+        * **default_snapshot_stream**: enable/disable the default snapshots stream in ~snapshots` (default: False)
         * **default_snapshot_period**: periodically publish (default: :data:`math.inf`)
         * **default_snapshot_blackboard_data**: include tracking and visited variables (default: True)
         * **default_snapshot_blackboard_activity**: include the blackboard activity (default: False)
@@ -208,15 +208,15 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
           * if :data:`math.inf`, it will block indefinitely
 
     ROS Publishers:
-        * **~/snapshots** (:class:`py_trees_interfaces.msg.BehaviourTree`): the default snapshot stream, if enabled
+        * **~snapshots** (:class:`py_trees_interfaces.msg.BehaviourTree`): the default snapshot stream, if enabled
 
     ROS Services:
-        * **~/blackboard_streams/close** (:class:`py_trees_ros_interfaces.srv.CloselackboardWatcher`)
-        * **~/blackboard_streams/get_variables** (:class:`py_trees_ros_interfaces.srv.GetBlackboardVariables`)
-        * **~/blackboard_streams/open** (:class:`py_trees_ros_interfaces.srv.OpenBlackboardWatcher`)
-        * **~/snapshot_streams/close** (:class:`py_trees_ros_interfaces.srv.CloseSnapshotsStream`)
-        * **~/snapshot_streams/open** (:class:`py_trees_ros_interfaces.srv.OpenSnapshotsStream`)
-        * **~/snapshot_streams/reconfigure** (:class:`py_trees_ros_interfaces.srv.ReconfigureSnapshotsStream`)
+        * **~blackboard_streams/close** (:class:`py_trees_ros_interfaces.srv.CloselackboardWatcher`)
+        * **~blackboard_streams/get_variables** (:class:`py_trees_ros_interfaces.srv.GetBlackboardVariables`)
+        * **~blackboard_streams/open** (:class:`py_trees_ros_interfaces.srv.OpenBlackboardWatcher`)
+        * **~snapshot_streams/close** (:class:`py_trees_ros_interfaces.srv.CloseSnapshotsStream`)
+        * **~snapshot_streams/open** (:class:`py_trees_ros_interfaces.srv.OpenSnapshotsStream`)
+        * **~snapshot_streams/reconfigure** (:class:`py_trees_ros_interfaces.srv.ReconfigureSnapshotsStream`)
 
     Topics and services are not intended for direct use, but facilitate the operation of the
     utilities :ref:`py-trees-tree-watcher` and :ref:`py-trees-blackboard-watcher`.
@@ -274,16 +274,16 @@ class BehaviourTree(py_trees.trees.BehaviourTree):
         """
         if visitor is None:
             visitor = visitors.SetupLogger()
-        self.default_snapshot_stream_topic_name = SnapshotStream.expand_topic_name("~/snapshots")
+        self.default_snapshot_stream_topic_name = SnapshotStream.expand_topic_name("~snapshots")
 
         ########################################
         # ROS Comms
         ########################################
         self.snapshot_stream_services = utilities.Services(
             service_details=[
-                ("close", "~/snapshot_streams/close", py_trees_srvs.CloseSnapshotStream, self._close_snapshot_stream),
-                ("open", "~/snapshot_streams/open", py_trees_srvs.OpenSnapshotStream, self._open_snapshot_stream),
-                ("reconfigure", "~/snapshot_streams/reconfigure", py_trees_srvs.ReconfigureSnapshotStream, self._reconfigure_snapshot_stream),
+                ("close", "~snapshot_streams/close", py_trees_srvs.CloseSnapshotStream, self._close_snapshot_stream),
+                ("open", "~snapshot_streams/open", py_trees_srvs.OpenSnapshotStream, self._open_snapshot_stream),
+                ("reconfigure", "~snapshot_streams/reconfigure", py_trees_srvs.ReconfigureSnapshotStream, self._reconfigure_snapshot_stream),
             ],
             introspection_topic_name="snapshot_streams/services"
         )

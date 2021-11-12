@@ -182,7 +182,7 @@ class Publishers(object):
 
            publishers = py_trees.utilities.Publishers(
                [
-                   ('foo', '~/foo', std_msgs.String, True, 5),
+                   ('foo', '~foo', std_msgs.String, True, 5),
                    ('bar', '/foo/bar', std_msgs.String, False, 5),
                    ('foobar', '/foo/bar', std_msgs.String, False, 5),
                ]
@@ -205,7 +205,7 @@ class Publishers(object):
             )
 
         self.introspection_service = rospy.Service(
-            name="~/introspection/" + introspection_topic_name,
+            name="~introspection/" + introspection_topic_name,
             service_class=py_trees_srvs.IntrospectPublishers,
             handler=self.introspection_callback
         )
@@ -232,7 +232,7 @@ class Subscribers(object):
 
            subscribers = py_trees.utilities.Subscribers(
                [
-                   ('foo', '~/foo', std_msgs.String, True, foo),
+                   ('foo', '~foo', std_msgs.String, True, foo),
                    ('bar', '/foo/bar', std_msgs.String, False, self.foo),
                    ('foobar', '/foo/bar', std_msgs.String, False, foo.bar),
                ]
@@ -255,7 +255,7 @@ class Subscribers(object):
             )
 
         self.introspection_service = rospy.Service(
-            name="~/introspection/" + introspection_topic_name,
+            name="~introspection/" + introspection_topic_name,
             service_class=py_trees_srvs.IntrospectSubscribers,
             handler=self.introspection_callback
         )
@@ -282,7 +282,7 @@ class Services(object):
 
            services = py_trees.utilities.Services(
                [
-                   ('open_foo', '~/get_foo', foo_interfaces.srv.OpenFoo, open_foo_callback),
+                   ('open_foo', '~get_foo', foo_interfaces.srv.OpenFoo, open_foo_callback),
                    ('open_foo', '/foo/open', foo_interfaces.srv.OpenFoo, self.open_foo_callback),
                    ('get_foo_bar', '/foo/bar', foo_interfaces.srv.GetBar, self.foo.get_bar_callback),
                ]
@@ -304,7 +304,7 @@ class Services(object):
             )
 
         self.introspection_service = rospy.Service(
-            name="~/introspection/" + introspection_topic_name,
+            name="~introspection/" + introspection_topic_name,
             service_class=py_trees_srvs.IntrospectServices,
             handler=self.introspection_callback
         )

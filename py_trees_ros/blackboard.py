@@ -219,18 +219,18 @@ class Exchange(object):
     that enable users to introspect or watch relevant parts of the blackboard.
 
     ROS Publishers:
-        * **~/_watcher_<N>** (:class:`std_msgs.msg.String`)
+        * **~_watcher_<N>** (:class:`std_msgs.msg.String`)
 
           * streams the (sub)blackboard over a blackboard watcher connection
 
     ROS Services:
-        * **~/get_variables** (:class:`py_trees_msgs.srv.GetBlackboardVariables`)
+        * **~get_variables** (:class:`py_trees_msgs.srv.GetBlackboardVariables`)
 
           * list all the blackboard variable names (not values)
-        * **~/open** (:class:`py_trees_msgs.srv.OpenBlackboardStream`)
+        * **~open** (:class:`py_trees_msgs.srv.OpenBlackboardStream`)
 
           * request a publisher to stream a part of the blackboard contents
-        * **~/close** (:class:`py_trees_msgs.srv.CloseBlackboardStream`)
+        * **~close** (:class:`py_trees_msgs.srv.CloseBlackboardStream`)
 
           * close a previously opened watcher
 
@@ -287,7 +287,7 @@ class Exchange(object):
             ("close", py_trees_srvs.CloseBlackboardStream)
         ]:
             self.services[service_name] = rospy.Service(
-                name='~/blackboard_streams/' + service_name,
+                name='~blackboard_streams/' + service_name,
                 service_class=service_type,
                 handler=getattr(self, "_{}_service".format(service_name))
             )
@@ -374,7 +374,7 @@ class Exchange(object):
 
     def _open_service(self, request):
         response = py_trees_srvs.OpenBlackboardStreamResponse()
-        response.topic = rospy.resolve_name("~/blackboard_streams/_watcher_" + str(Exchange._counter))
+        response.topic = rospy.resolve_name("~blackboard_streams/_watcher_" + str(Exchange._counter))
         Exchange._counter += 1
         if request.with_activity_stream:
             self.register_activity_stream_client()
