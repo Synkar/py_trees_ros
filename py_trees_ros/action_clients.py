@@ -168,7 +168,7 @@ class FromBlackboard(py_trees.behaviour.Behaviour):
             raise exceptions.TimedOutError(self.feedback_message)
         else:
             self.feedback_message = "... connected to action server [{}]".format(self.action_name)
-            rospy.loginfo("{}[{}]".format(self.feedback_message, self.qualified_name))
+            rospy.logdebug("{}[{}]".format(self.feedback_message, self.qualified_name))
 
     def initialise(self):
         """
