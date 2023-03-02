@@ -23,18 +23,16 @@
 
   <build_depend>python3-setuptools</build_depend>
 
-  <test_depend>python3-pytest</test_depend>
+  <!-- <test_depend>python3-pytest</test_depend> -->
 
-  <doc_depend>python3-sphinx</doc_depend>
-  <doc_depend>python3-sphinx-argparse</doc_depend>
-  <doc_depend>python3-sphinx-rtd-theme</doc_depend>
+  <!-- <doc_depend>python3-sphinx</doc_depend> -->
+  <!-- <doc_depend>python3-sphinx-argparse</doc_depend> -->
+  <!-- <doc_depend>python3-sphinx-rtd-theme</doc_depend> -->
 
   <!-- core dependencies -->
-  <depend>py_trees</depend>
+  <!-- <depend>py_trees</depend> -->
   <depend>py_trees_ros_interfaces</depend>
   <depend>rcl_interfaces</depend>
-  <depend>rclpy</depend>
-  <depend>ros2topic</depend>
   <depend>std_msgs</depend>
   <depend>unique_identifier_msgs</depend>
 
