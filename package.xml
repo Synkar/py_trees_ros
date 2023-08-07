@@ -29,17 +29,25 @@
   <!-- <doc_depend>python3-sphinx-argparse</doc_depend> -->
   <!-- <doc_depend>python3-sphinx-rtd-theme</doc_depend> -->
 
+  <depend>rospy</depend>
+
   <!-- core dependencies -->
-  <!-- <depend>py_trees</depend> -->
-  <depend>py_trees_ros_interfaces</depend>
-  <depend>rcl_interfaces</depend>
-  <depend>std_msgs</depend>
-  <depend>unique_identifier_msgs</depend>
+  <exec_depend>custom-py-trees-pip</exec_depend>
+  <exec_depend>py_trees_ros_interfaces</exec_depend>
+  <exec_depend>python3-rospkg</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>rosservice</exec_depend>
+  <exec_depend>rostopic</exec_depend>
+  <exec_depend>unique_identifier_msgs</exec_depend>
 
   <!-- behaviour dependencies (subscribers, transforms, ...) -->
-  <depend>geometry_msgs</depend>
-  <depend>sensor_msgs</depend>
-  <depend>tf2_ros</depend>  <!-- monitor this, might migrate to a python only package -->
+  <exec_depend>actionlib</exec_depend>
+  <exec_depend>actionlib_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>  <!-- monitor this, might migrate to a python only package -->
 
   <!-- testing dependencies -->
 
